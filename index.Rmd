@@ -1,0 +1,849 @@
+---
+title: 'Absenteeism At Work'
+author: 'Li Wen, Stephanie Yow'
+email_address: 'stephyow@bu.edu'
+output:
+  html_document:
+    df_print: paged
+    fig_width: 8
+    code_folding: hide
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: true
+bibliography: citations.bib
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	fig.height = 6,
+	fig.width = 8,
+	message = FALSE,
+	warning = FALSE
+)
+
+library(tidyverse)
+library(DT)
+library(plotly)
+library(sampling)
+```
+
+
+```{css echo = FALSE}
+.email_address {
+  display: none;
+}
+.main-container {
+  max-width: 100%;
+}
+```
+
+  
+```{r, echo = FALSE, out.width = '100%', fig.cap = 'Photo by Pixabay from Pexels', fig.align = 'center'}
+knitr::include_graphics('images/out_of_office.jpg')
+```
+
+
+## 1. Costs and Causes of Absenteeism
+
+Forbes estimates the average cost of absenteeism to be $4,080 per full-time 
+employee and $2,040 per part-time employee annually [@kelly_understanding_nodate].
+
+According to the Academy to Innovate HR [@vulpen_absenteeism_2020],
+
+> Absenteeism is any failure to report for or remain at work as scheduled, 
+regardless of the reason... [the key is] the person was scheduled to work. 
+This means that absenteeism does not include [planned] vacation, personal leave, 
+jury-duty leave, or other reasons.
+
+What gives rise to absenteeism? Studies show that poor health is a significant 
+contributing cause [@nawata_evaluation_2024]. For example, histories of heart and 
+kidney disease and large weight increments are positively associated with absenteeism.
+
+
+## 2. Report Objectives
+
+For this report, we assume that a company's human resource department wants 
+to look into the state of absenteeism among its employees. They have a suspicion 
+that absenteeism due to poor health costs the most to the company, and would like
+confirmation supported by data. In particular, they wish to know if employees with 
+a higher risk for poor health exhibited more absenteeism than others.
+
+Objectives are to:
+
+- Analyse the distribution and variability of absenteeism time
+
+- Demonstrate the applicability of the Central Limit Theorem to absenteeism time
+
+- Analyse reasons cited for absence by frequency and absenteeism time
+
+- Analyse health and absenteeism by comparing observations between all absentees 
+and various samples, using body mass index (BMI) as a health indicator
+
+Please refer to the [Appendix](#appendix) for a checklist of project requirements.
+
+
+## 3. About the Dataset
+
+From July 2007 to July 2010, 740 absenteeism records were collected at a 
+non-fictional courier company in Brazil for research purposes [@andrea_martiniano_absenteeism_2012], 
+and then donated to UC Irvine's Machine Learning Repository in 2018.
+
+Attributes comprise (1) absenteeism time in hours and reasons cited for absence; 
+(2) day, month and season of absence; (3) job-related attributes; and (4) personal 
+attributes. Documentation on attributes can be found 
+[here](https://archive.ics.uci.edu/dataset/445/absenteeism+at+work){target="_blank"}.
+
+
+```{r echo = TRUE}
+# import data
+ab <- read.csv('Absenteeism_at_work.csv')
+
+ab
+```
+
+
+Some discrete numerical values are encoded categorical values. For example,
+values 1-21 under `Reason.for.absence` refer to disease classification codes 
+established in the [International Classification of Diseases 10th Revision](https://icd.who.int/browse10/2010/en#/){target="_blank"}.
+
+Although absenteeism records were collected over 3 years, the dataset does not 
+have a 'year' attribute, for reasons unknown. Each record refers to absenteeism 
+exhibited by an employee within a month. An employee may have more than one 
+record. For example, in the first record, employee ID 11 was absent in July 
+(year unknown) for 4 hours, and then absent in July again for 2 hours in the
+5th record.
+
+While the dataset does not have missing values, it has anomalous 0 values for
+attributes that should not have 0 values. For example, `Reason.for.absence` 
+should only contain values >0 based on dataset documentation, but has a 0 value 
+in the 2nd record.
+
+
+### 3.1 Preprocessing Aspects
+
+There are 5 main aspects to preprocess:
+
+- Standardise column naming convention
+
+- Select columns relevant to report objectives
+
+- Remove anomalous 0 values from columns that should not have 0 values
+
+- Replace encoded categorical values with actual meanings based on documentation
+
+- Classify BMI using World Health Organization criteria for adults, i.e. underweight 
+(<18.5), healthy weight (18.5 to <25), overweight (25 to <30), and obesity (30+), 
+to aid sampling and analysis
+
+
+```{r echo = TRUE}
+# standardise column naming convention
+colnames(ab) |>
+  str_to_lower() |>
+  str_replace_all(pattern = '\\.', replacement = '_') -> colnames(ab)
+
+# select relevant columns
+# remove anomalous 0 values
+ab |>
+  select(id, absenteeism_time_in_hours, body_mass_index, reason_for_absence) |>
+  filter(reason_for_absence != 0, absenteeism_time_in_hours != 0) -> ab
+
+# replace encoded categorical values
+for (i in 1:length(ab$reason_for_absence)) {
+  if (ab$reason_for_absence[i] %in% 1:21) {
+    ab$reason_unencoded[i] <- 'Disease'
+  } else if (ab$reason_for_absence[i] == 22) {
+    ab$reason_unencoded[i] <- 'Patient Follow-Up'
+  } else if (ab$reason_for_absence[i] == 23) {
+    ab$reason_unencoded[i] <- 'Medical Consultation'
+  } else if (ab$reason_for_absence[i] == 24) {
+    ab$reason_unencoded[i] <- 'Blood Donation'
+  } else if (ab$reason_for_absence[i] == 25) {
+    ab$reason_unencoded[i] <- 'Laboratory Examination'
+  } else if (ab$reason_for_absence[i] == 26) {
+    ab$reason_unencoded[i] <- 'Unjustified Absence'
+  } else if (ab$reason_for_absence[i] == 27) {
+    ab$reason_unencoded[i] <- 'Physiotherapy'
+  } else if (ab$reason_for_absence[i] == 28) {
+    ab$reason_unencoded[i] <- 'Dental Consultation'
+  } else {
+    ab$reason_unencoded[i] <- 'Unjustified Absence'
+  }
+}
+
+# classify body mass index
+# no observed records of employees who are underweight (bmi < 18.5)
+for (i in 1:length(ab$body_mass_index)) {
+  if (ab$body_mass_index[i] >= 18.5 
+      & ab$body_mass_index[i] <= 24.9) {
+    ab$bmi_category[i] <- 'Healthy Weight'
+  } else if (ab$body_mass_index[i] >= 25.0
+             & ab$body_mass_index[i] <= 29.9) {
+    ab$bmi_category[i] <- 'Overweight'
+  } else {
+    ab$bmi_category[i] <- 'Obesity'
+  }
+}
+
+# cast new column bmi_category as factor
+ab$bmi_category <- factor(ab$bmi_category, 
+                          levels = c('Healthy Weight', 'Overweight', 'Obesity'))
+
+# rearrange columns
+ab |>
+  select(id, absenteeism_time_in_hours, reason_for_absence, 
+         reason_unencoded, everything()) -> ab
+
+datatable(ab,
+          caption = 'After preprocessing: 696 rows x 6 columns',
+          options = list(searching = FALSE)
+          )
+```
+
+
+## 4. State of Absenteeism
+
+### 4.1 Distribution and Variability of Absenteeism Time
+
+Observed distribution of absenteeism time is right-skewed. 417 (59.9%) of 696 
+records are in the [0,5) hours range. 216 (31.0%) records are in 
+the [5,10) hours range. Remaining <10% of records are at least 15 hours.
+
+
+```{r echo = TRUE}
+ab |>
+  plot_ly(x = ~absenteeism_time_in_hours, type = 'histogram', alpha = 0.8, 
+          showlegend = FALSE, xbins = list(start = 0, end = 125, size = 5)) |>
+  layout(title = 'Distribution of Absenteeism Time',
+         xaxis = list(title = 'Absenteeism Time (Hours)',
+                      ticktext = format(seq(0, 125, by = 5)),
+                      tickvals = seq(0, 125, by = 5), tickmode = 'array',
+                      range = c(0, 125)),
+         yaxis = list(title = 'Frequency', range = c(0, 450)),
+         bargap = 0.005)
+```
+
+
+Observed median absenteeism time is 3 hours. Bottom 25% of records had 2 hours or 
+less of absenteeism time. Bottom 75% of records had 8 hours or less of absenteeism 
+time. In other words, the variation of absenteeism time between the 25th and 75th 
+percentile of records (middle 50%) was 6 hours.
+
+Records with an absenteeism time of >16 hours may be considered outliers. Highest 
+number of hours absent for any employee was 120 (equivalent to three 40-hour work 
+weeks). Lowest number of hours was 1, indicating a wide range.
+
+While it may be tempting to omit outliers to lessen variability in the dataset, 
+they are legitimate observations of absenteeism, and depict the real-world
+nature of unplanned and prolonged situations that affect our ability to work.
+
+
+```{r echo = TRUE}
+ab |>
+  plot_ly(y = ~absenteeism_time_in_hours, type = 'box',
+          name = 'Absenteeism Time (Hours)', showlegend = FALSE) |>
+  layout(title = 'Variability of Absenteeism Time',
+         yaxis = list(title = ''))
+```
+
+
+### 4.2 Applicability of the Central Limit Theorem to Absenteeism Time
+
+Despite a right-skewed distribution, given a sufficiently large sample size, 
+the distributions of sample means for absenteeism time will approximate or 
+converge to a normal distribution.
+
+In order to demonstrate the theorem, we set sample sizes of 30, 60, 90 and 120,
+and draw 1,000 samples without replacement per sample size. Means of 1,000 samples
+are plotted in a density histogram, one histogram per sample size.
+
+
+```{r echo = TRUE}
+set.seed(138)
+
+n_samples <- 1000
+sample_size <- c(30, 60, 90, 120)
+
+xbar <- numeric(length = n_samples)
+plot_list <- list()
+plot_tib <- tibble()
+
+for (i in 1:length(sample_size)) {
+  size <- sample_size[i]
+  for (j in 1:n_samples) {
+    xbar[j] <- mean(sample(ab$absenteeism_time_in_hours, size = size, 
+                           replace = FALSE))
+  }
+  
+  plot <- plot_ly(
+    x = xbar,
+    type = 'histogram',
+    name = paste('n =', size),
+    histnorm = 'probability density'
+  ) |>
+    layout(
+      xaxis = list(title = 'Absenteeism Time (Hours) Sample Mean', 
+                   range = c(0, 20)),
+      yaxis = list(title = 'Density', range = c(0, 0.4))
+    )
+  
+  plot_list[[i]] <- plot
+  
+  plot_tib <- rbind(plot_tib, 
+                   tibble(
+                     'Distribution' = paste('Sample Means (n = ', size, ')', sep = ''),
+                     'Mean' = round(mean(xbar), 2),
+                     'Standard Deviation' = round(sd(xbar), 2),
+                     'Theoretical Standard Deviation' = 
+                       round(sd(ab$absenteeism_time_in_hours)/sqrt(size), 2)
+                     )
+                   )
+}
+
+subplot(
+  plot_list,
+  nrows = 2,
+  shareX = TRUE,
+  shareY = TRUE,
+  titleX = TRUE,
+  titleY = TRUE
+) |>
+  layout(
+    title = 'As sample size n increases, sample means distributions converge to 
+    a normal distribution',
+    showlegend = TRUE
+  )
+
+plot_tib <- rbind(tibble('Distribution' = 'Input Data',
+                         'Mean' = round(mean(ab$absenteeism_time_in_hours), 2),
+                         'Standard Deviation' = 
+                           round(sd(ab$absenteeism_time_in_hours), 2),
+                         'Theoretical Standard Deviation' = 
+                           round(sd(ab$absenteeism_time_in_hours), 2)
+                         ), plot_tib
+                 )
+
+knitr::kable(plot_tib, 
+             caption = 'Comparison of input data and sample means distributions')
+```
+
+
+A few observations can be made:
+
+- As sample size n increases, means of sample means distributions converge to 
+the mean of the input data (7.36 hours).
+
+- Standard deviations and theoretical standard deviations of sample means 
+distributions are similar. Theoretical values are derived using standard
+deviation of input data / square root of n, where n is the sample size.
+
+- Spreads of sample means distributions are narrower than the spread of input 
+data, and have lower standard deviations than input data.
+
+- As sample size n increases, standard deviation decreases, and the spreads of 
+sample means distributions become narrower.
+
+
+## 5. Reasons Cited For Absence
+
+In this section, reasons cited for absence shall be analysed by frequency and 
+mean absenteeism time. From the results, we can either confirm or dismiss the 
+suspicion that absenteeism due to poor health costs the most to the company.
+
+### 5.1 By Frequency
+
+Disease was the most frequent reason for absence (262 occurrences, or 37.6% of 
+total). Medical consultation was the second most frequent (149 occurrences, or 
+21.4% of total).
+
+
+```{r echo = TRUE}
+as.data.frame(sort(table(ab$reason_unencoded), descending = TRUE)) |>
+  plot_ly(y = ~Var1, x = ~Freq, type = 'bar', orientation = 'h') |>
+  layout(title = 'Reasons For Absence',
+         xaxis = list(title = 'Frequency',
+                      ticktext = format(seq(0, 300, by = 50)),
+                      tickvals = seq(0, 300, by = 50), tickmode = 'array',
+                      range = c(0, 300)),
+         yaxis = list(title = ''))
+```
+
+
+### 5.2 By Mean Absenteeism Time
+
+Absences due to disease, blood donation and patient follow-up had the highest
+mean times, exceeding the total mean of 7.36 hours. Furthermore, absences due to 
+disease had a mean time of 13.52 hours.
+
+
+```{r echo = TRUE}
+ab |>
+  group_by(reason_unencoded) |>
+  summarise(mean_absenteeism_time = round(mean(absenteeism_time_in_hours), 2)) |>
+  arrange(mean_absenteeism_time) -> T1
+
+T1$reason_unencoded <- factor(T1$reason_unencoded, levels = T1$reason_unencoded)
+
+T1 |>
+  plot_ly(x = ~mean_absenteeism_time, y = ~reason_unencoded, type  = 'bar',
+          orientation = 'h') |>
+  layout(title = 'Reasons For Absence',
+         xaxis = list(title = 'Mean Absenteeism Time (Hours)',
+                      range = c(0, 14)),
+         yaxis = list(title = ''))
+```
+
+
+Indeed, disease was the most frequently cited and most time-consuming reason for 
+absence. Since time is money where salaries are concerned, absences due to 
+disease could be said to cost the most to the company.
+
+
+### 5.3 By Type of Disease
+
+Among records that cited disease as a reason, the most frequent disease type
+was disease of the musculoskeletal system and connective tissue. According to the 
+International Classification of Diseases 10th Revision, conditions such as 
+osteoarthritis is included in this broad type.
+
+
+```{r echo = TRUE}
+T2 <- table(subset(ab, reason_for_absence %in% 1:21)$reason_for_absence)
+
+as.data.frame(sort(T2, decreasing = TRUE)) |>
+  plot_ly(y = ~Freq, x = ~Var1, type  = 'bar') |>
+  layout(title = 'Types of Diseases Causing Absenteeism',
+         yaxis = list(title = 'Frequency',
+                      range = c(0, 60)),
+         xaxis = list(title = 'International Classification of Diseases 10th Revision (ICD-10) Code'))
+
+knitr::kable(
+  tibble(
+    'Code' = names(sort(T2, decreasing = TRUE)[1:5]),
+    'Description' = c('Diseases of the musculoskeletal system and connective tissue',
+                      'Injury, poisoning and certain other consequences of external causes',
+                      'Diseases of the digestive system',
+                      'Diseases of the respiratory system',
+                      'Symptoms, signs and abnormal clinical and laboratory findings, not elsewhere classified')
+    ), 
+  'caption' = 'Top 5 disease types causing absenteeism by ICD-10 code and description'
+  )
+```
+
+
+## 6. Health and Absenteeism
+
+People who have overweight and obesity (BMI ≥ 25) have an increased risk for 
+diseases and health conditions [@cdc_how_2025], compared to people with healthy 
+weight. Risks include early mortality, high blood pressure, type 2 diabetes, 
+coronary heart disease, stroke, cancer, and osteoarthritis. 
+
+Using BMI as a health indicator, we shall attempt to answer the question:
+
+> Did employees with a higher risk for poor health exhibit more absenteeism than others?
+
+This report shall adopt people-first language that is encouraged by the US CDC, which
+means instead of using descriptions that may carry stigma such as 'obese employees', 
+it uses people-first descriptions such as 'employees who have/with obesity/overweight'.
+
+### 6.1 Observations
+
+BMI distribution across all employees appears to follow the shape of an almost 
+normal distribution, as it shows some symmetry around the mean (26.0), and the 
+mean is close to the median (25) and the mode (25).
+
+Furthermore, 69.70% of values fall within one standard deviation of the mean,
+93.94% within 2 standard deviations of the mean, and 100% within 3 standard 
+deviations from the mean (due to the limited number of values), close to the
+spread of a normal distribution.
+
+
+```{r echo = TRUE}
+ab |>
+  group_by(id) |>
+  summarise(bmi_by_id = mean(body_mass_index)) -> T3
+
+mean_T3 <- mean(T3$bmi_by_id)
+sd_T3 <- sd(T3$bmi_by_id)
+
+within_1sd <- nrow(subset(T3, bmi_by_id > mean_T3-sd_T3 
+                            & bmi_by_id < mean_T3+sd_T3
+                          )) / nrow(T3)*100
+
+within_2sd <- nrow(subset(T3, bmi_by_id > mean_T3-sd_T3*2 
+                            & bmi_by_id < mean_T3+sd_T3*2
+                          )) / nrow(T3)*100
+
+within_3sd <- nrow(subset(T3, bmi_by_id > mean_T3-sd_T3*3 
+                            & bmi_by_id < mean_T3+sd_T3*3
+                          )) / nrow(T3)*100
+
+knitr::kable(
+  tribble(
+    ~Spread, ~`BMI Distribution`, ~`Normal Distribution`,
+    '(μ-σ, μ+σ)', sprintf('%.2f%% of values', within_1sd), '68.27% of values',
+    '(μ-2σ, μ+2σ)', sprintf('%.2f%%', within_2sd), '95.45%',
+    '(μ-3σ, μ+3σ)', sprintf('%.0f%%', within_3sd), '99.73%'
+    ),
+  caption = 'Comparison of BMI and normal distributions'
+  )
+```
+
+
+As one employee may have more than one absenteeism record, records were grouped 
+by unique employee first, and then summarised by mean BMI, in case of fluctuations 
+in weight over 3 years.
+
+
+```{r echo = TRUE}
+median_T3 <- median(T3$bmi_by_id)
+mode_T3 <- names(sort(table(T3$bmi_by_id), decreasing = TRUE)[1])
+
+T3 |>
+  plot_ly(x = ~bmi_by_id, type = 'histogram', alpha = 0.8, 
+          showlegend = FALSE, xbins = list(start = 15, end = 40, size = 5)) |>
+  layout(
+    shapes = list(
+      list(
+        type = 'line',
+        opacity = 0.8,
+        y0 = 0, y1 = 245,
+        x0 = 26, x1 = 26,
+        line = list(color = "red", width = 2, dash = "dash")
+      ),
+     list(
+        type = 'line',
+        opacity = 0.8,
+        y0 = 0, y1 = 245,
+        x0 = 25, x1 = 25,
+        line = list(color = "green", width = 2, dash = "dash")
+      )      
+    ),
+    annotations = list(
+      list(
+        x = 27.6, y = 14.5, text = paste('Mean =', round(mean_T3, 1)), showarrow = FALSE
+        ),
+      list(
+        x = 23.4, y = 14.5, text = paste('Median =', median_T3), showarrow = FALSE
+        ),
+      list(
+        x = 23.6, y = 13.5, text = paste('Mode =', mode_T3), showarrow = FALSE
+        )
+      ),    
+         title = paste('Distribution of Body Mass Index (BMI)'),
+         xaxis = list(title = 'Mean Body Mass Index (BMI)',
+                      ticktext = format(seq(15, 40, by = 5)),
+                      tickvals = seq(15, 40, by = 5), tickmode = 'array',
+                      range = c(15, 40)),
+         yaxis = list(title = 'Frequency', range = c(0, 15)),
+         bargap = 0.005
+    )
+```
+
+
+Where absenteeism time is concerned, a look at the scatter plot of BMI and 
+absenteeism time of all records suggests that while there is no observable 
+linear relationship, absenteeism time outliers (>16 hours) appear to cluster 
+around BMI of 25, which falls in the 'overweight' category.
+
+
+```{r echo = TRUE}
+ab |>
+  plot_ly(y = ~absenteeism_time_in_hours, x = ~body_mass_index,
+        size = ~absenteeism_time_in_hours,
+        type = 'scatter', mode = 'markers') |>
+  layout(shapes = list(type = 'rect', fillcolor = 'red', 
+                       line = list(color = "red"), 
+                       opacity = 0.2,
+                       y0 = 0, y1 = 122, 
+                       x0 = 24.5, x1 = 40),
+         title = 'Did records associated with BMI ≥ 25 exhibit more absenteeism?',
+         xaxis = list(title = 'Body Mass Index (BMI)',
+                      range = c(15, 40)),
+         yaxis = list(title = 'Absenteeism Time (Hours)', range = c(0, 130)))
+```
+
+
+Based on mean absenteeism time, employees with overweight exhibited more absenteeism 
+(8.99 hours) than others. Mean absenteeism time of employees with obesity (6.76 hours) 
+was lower than that of employees with healthy weight (8.17 hours).
+
+As one employee may have more than one absenteeism record, mean absenteeism time 
+per unique employee was calculated first, and then an average of all mean 
+absenteeism times of unique employees within each BMI category was taken. 
+There were no employees in the 'underweight' category, hence this
+category was not shown for comparison.
+
+
+```{r echo = TRUE}
+ab |>
+  group_by(bmi_category, id) |>
+  summarise(mean_absence = round(mean(absenteeism_time_in_hours), 2)) |>
+  group_by(bmi_category) |>
+  summarise(mean_absence_bmi = round(mean(mean_absence), 2)) |>
+  plot_ly(x = ~mean_absence_bmi, y = ~bmi_category, type = 'bar',
+          orientation = 'h') |>
+  layout(title = 'Employees with overweight exhibited more absenteeism than others',
+         xaxis = list(title = 'Mean Absenteeism Time (Hours)',
+                      range = c(0, 10)),
+         yaxis = list(title = ''))
+```
+
+
+Observations so far indicate that employees with a higher risk for poor health 
+did not conclusively exhibit more absenteeism than others, as that statement was 
+not consistent for employees with obesity who are at higher risk for poor health, 
+according to the US CDC.
+
+
+### 6.2 Would Conclusions Change Under Different Sampling Methods?
+
+This section continues to examine health and absenteeism time by drawing 
+samples from input data. There are 4 samples:
+
+- Cited disease as a reason (n = 262, actual count): subset of all records; 
+only records that state 'Disease' under `reason_unencoded` are retrieved
+
+- Simple random sample without replacement (n = 262)
+
+- Systematic sample based on unequal probabilities (n = 262): proportional-to-size 
+inclusion probabilities are generated based on absenteeism time
+
+- Stratified sample (n = 262): strata proportionally represents size of BMI 
+categories and size of absenteeism records of unique employees, and the sample 
+is taken using simple random sampling without replacement
+
+A sample size of 262 was chosen for samples drawn using sampling methods to be 
+consistent with the size of the subset.
+
+A look at the distribution of absenteeism time by sample shows that the stratified 
+sample is most representative of input data by having the closest mean (7.23 hours), 
+the same median (3 hours) and the same interquartile range (6 hours). Simple random 
+sample is next most representative of input data by having a close mean (7.83 hours), 
+a close median (4 hours) and the same interquartile range (6 hours).
+
+
+```{r echo = TRUE}
+sample_size <- 262
+
+# cited disease as a reason
+ab |>
+  filter(reason_unencoded == 'Disease') -> ab1
+
+ab1 |>
+  group_by(bmi_category, id) |>
+  summarise(mean_absence = round(mean(absenteeism_time_in_hours), 2)) |>
+  group_by(bmi_category) |>
+  summarise(mean_absence_bmi = round(mean(mean_absence), 2)) |>
+  plot_ly(x = ~mean_absence_bmi, y = ~bmi_category, type = 'bar',
+          orientation = 'h', name = 'Cited Disease As Reason') |>
+  layout(xaxis = list(title = 'Mean Absenteeism Time (Hours)',
+                      range = c(0, 20)),
+         yaxis = list(title = '')) -> plot1
+
+# simple random sampling without replacement
+set.seed(138)
+
+s1 <- srswor(sample_size, nrow(ab))
+s1 <- ab[s1 != 0, ]
+
+s1 |>
+  group_by(bmi_category, id) |>
+  summarise(mean_absence = round(mean(absenteeism_time_in_hours), 2)) |>
+  group_by(bmi_category) |>
+  summarise(mean_absence_bmi = round(mean(mean_absence), 2)) |>
+  plot_ly(x = ~mean_absence_bmi, y = ~bmi_category, type = 'bar',
+          orientation = 'h', name = 'Simple Random (WOR)') |>
+  layout(xaxis = list(title = 'Mean Absenteeism Time (Hours)',
+                      range = c(0, 20)),
+         yaxis = list(title = '')) -> plot2
+
+# unequal probability systematic sampling
+set.seed(138)
+
+pik <- inclusionprobabilities(ab$absenteeism_time_in_hours, sample_size)
+s2 <- UPsystematic(pik)
+s2 <- ab[s2 != 0, ]
+
+s2 |>
+  group_by(bmi_category, id) |>
+  summarise(mean_absence = round(mean(absenteeism_time_in_hours), 2)) |>
+  group_by(bmi_category) |>
+  summarise(mean_absence_bmi = round(mean(mean_absence), 2)) |>
+  plot_ly(x = ~mean_absence_bmi, y = ~bmi_category, type = 'bar',
+          orientation = 'h', name = 'UP Systematic') |>
+  layout(xaxis = list(title = 'Mean Absenteeism Time (Hours)',
+                      range = c(0, 20)),
+         yaxis = list(title = '')) -> plot3
+
+# stratified sampling
+set.seed(138)
+
+ab |>
+  arrange(bmi_category, id) -> ab
+
+freq <- table(ab$bmi_category, ab$id)
+
+strata_size <- round(sample_size * freq / sum(freq))
+strata_size <- as.vector(t(strata_size))
+strata_size <- strata_size[strata_size != 0] # sum is 265
+# make adjustment to sum of 262
+strata_size[c(11, 26, 28)] <- strata_size[c(11, 26, 28)] - 1
+
+s3 <- sampling::strata(ab, stratanames = c('bmi_category', 'id'), 
+                       size = strata_size, method = c('srswor'), 
+                       description = FALSE)
+
+s3 <- getdata(ab, s3)
+
+s3 |>
+  group_by(bmi_category, id) |>
+  summarise(mean_absence = round(mean(absenteeism_time_in_hours), 2)) |>
+  group_by(bmi_category) |>
+  summarise(mean_absence_bmi = round(mean(mean_absence), 2)) |>
+  plot_ly(x = ~mean_absence_bmi, y = ~bmi_category, type = 'bar',
+          orientation = 'h', name = 'Stratified') |>
+  layout(xaxis = list(title = 'Mean Absenteeism Time (Hours)',
+                      range = c(0, 20)),
+         yaxis = list(title = '')) -> plot4
+
+# distribution of absenteeism time by sample
+ab |>
+  plot_ly(y = ~absenteeism_time_in_hours, type = 'box',
+          name = 'Input Data', boxmean = TRUE) |>
+   add_boxplot(data = ab1, y = ab1$absenteeism_time_in_hours,
+              name = 'Cited Disease As Reason', boxmean = TRUE) |> 
+  add_boxplot(data = s1, y = s1$absenteeism_time_in_hours,
+              name = 'Simple Random (WOR)', boxmean = TRUE) |>
+  add_boxplot(data = s2, y = s2$absenteeism_time_in_hours,
+              name = 'UP Systematic', boxmean = TRUE) |>  
+  add_boxplot(data = s3, y = s3$absenteeism_time_in_hours,
+              name = 'Stratified', boxmean = TRUE) |> 
+  layout(title = 'Stratified and simple random samples are most representative of input data',
+         xaxis = list(title = '', tickangle = -90),
+         yaxis = list(title = 'Absenteeism Time (Hours)'))
+```
+
+
+For the stratified sample, similar to that observed for input data, 
+only employees with overweight exhibited higher mean absenteeism time (8.55 hours) 
+than others. Employees with obesity exhibited the least mean absenteeism time (6.78 hours).
+
+For the simple random sample, mean absenteeism time of employees with overweight
+(9.3 hours) was just shy of employees with healthy weight (9.77 hours). 
+Employees with obesity exhibited the least mean absenteeism time (5.95 hours).
+
+For the unequal probability systematic sample, only employees with overweight 
+exhibited higher mean absenteeism time (15.12 hours) than others. 
+Employees with obesity exhibited the least mean absenteeism time (10.5 hours). 
+Higher overall means were due to higher absenteeism times being given weight 
+in inclusion probabilities.
+
+When disease was cited as a reason for absence, mean absenteeism time across 
+BMI categories increased relative to the stratified and simple random samples. 
+
+Only employees with overweight exhibited higher mean absenteeism time 
+(13.47 hours) than others. Mean absenteeism time of employees with obesity (11.16 hours)
+was almost on par with employees of healthy weight (11.27 hours). When employees with 
+obesity were absent due to disease, their absenteeism became more pronounced than when 
+they were absent for a variety of reasons including disease in other samples.
+
+
+```{r echo = TRUE}
+subplot(
+  list(plot1, plot2, 
+       plot3, plot4),
+  nrows = 2,
+  shareX = TRUE,
+  shareY = TRUE,
+  titleX = TRUE,
+  titleY = TRUE
+) |>
+  layout(
+    title = 'Employees with overweight continued to exhibit more absenteeism than others',
+    showlegend = TRUE
+  )
+```
+
+
+Using BMI as a health indicator, employees with a higher risk for poor health 
+did not conclusively exhibit more absenteeism than others. Reason for absence 
+mattered too.
+
+
+## 7. Report Summary
+
+Through this report, we learned that:
+
+- Median absenteeism time was 3 hours.
+
+- Mean absenteeism time was 7.36 hours.
+
+- Between the 25th percentile (2 hours) and 75th percentile (8 hours) of records, 
+absenteeism time varied by 6 hours.  
+
+- Despite a non-normal distribution, sample means distributions for absenteeism time 
+approximated or converged to a normal distribution, as the sample size grew.
+
+- Disease was the most frequently cited and most time-consuming reason for absence. 
+Since time is money where salaries are concerned, absences due to disease could be 
+said to cost the most to the company.
+
+- Disease of the musculoskeletal system and connective tissue was the most 
+frequently cited disease type.  
+
+- BMI distribution of employees followed the shape of an almost normal distribution.
+
+- Employees with a higher risk for poor health did not conclusively exhibit more
+absenteeism than others. Reason for absence mattered too.
+
+- If the human resource department wishes to investigate absenteeism more 
+by looking into a smaller dataset, the stratified or simple random sample may be 
+used as they are most representative of absenteeism in the company.
+
+
+## 8. References
+
+<div id = 'refs'></div>
+
+
+## 9. Appendix {#appendix}
+
+### 9.1 Checklist of Project Requirements
+
+
+```{r echo = FALSE}
+appendix <- tibble(
+  'Requirement' = c('Data Import and Preprocessing',
+                    'Univariate Analysis (Categorical)',
+                    'Univariate Analysis (Numerical)',
+                    'Bivariate Analysis',
+                    'Numerical Variable Distribution',
+                    'Applicability of Central Limit Theorem',
+                    'Sampling Methods',
+                    'Data Wrangling (dplyr, stringr, tibble)',
+                    'Use of Plotly'
+                    ),
+  'Section' = c('3',
+                '5.1, 5.3',
+                '4.1, 6.1',
+                '5.2, 6.1, 6.2',
+                '4.1, 6.1',
+                '4.2',
+                '6.2',
+                'Entire report',
+                'Entire report'
+                )
+  )
+knitr::kable(appendix)
+```
+
+
+------------------------------------------------------------------------------
+Questions? Please contact [Stephanie Yow](mailto: `r rmarkdown::metadata$email_address`). 
+
+This report was written as a final project of Professor Suresh Kalathur's graduate-level 
+course, CS544 Foundations of Analytics and Data Visualization, conducted during Fall 2025 
+at the Metropolitan College Department of Computer Science, Boston University, USA. 
